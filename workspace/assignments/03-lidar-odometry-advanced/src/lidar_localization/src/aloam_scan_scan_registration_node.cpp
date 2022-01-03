@@ -97,9 +97,10 @@ Eigen::Vector3d t_w_curr(0, 0, 0);
 // q_curr_last(x, y, z, w), t_curr_last
 double para_q[4] = {0, 0, 0, 1};
 double para_t[3] = {0, 0, 0};
+double paras[7] = {0, 0, 0, 1, 0, 0, 0};
 
-Eigen::Map<Eigen::Quaterniond> q_last_curr(para_q);
-Eigen::Map<Eigen::Vector3d> t_last_curr(para_t);
+Eigen::Map<Eigen::Quaterniond> q_last_curr(paras);
+Eigen::Map<Eigen::Vector3d> t_last_curr(paras + 4);
 
 std::queue<sensor_msgs::PointCloud2ConstPtr> cornerSharpBuf;
 std::queue<sensor_msgs::PointCloud2ConstPtr> cornerLessSharpBuf;
@@ -290,8 +291,15 @@ int main(int argc, char **argv)
                     ceres::Problem::Options problem_options;
 
                     ceres::Problem problem(problem_options);
-                    problem.AddParameterBlock(para_q, 4, q_parameterization);
-                    problem.AddParameterBlock(para_t, 3);
+                    // problem.AddParameterBlock(para_q, 4, q_parameterization);
+                    // problem.AddParameterBlock(para_t, 3);
+
+                    // problem.AddParameterBlock(paras, 4, q_parameterization);
+                    // problem.AddParameterBlock(paras + 4, 3);
+
+                    problem.AddParameterBlock(paras, 7, new PoseSE3Parameterization());
+
+                
 
                     pcl::PointXYZI pointSel;
                     std::vector<int> pointSearchInd;
@@ -380,8 +388,12 @@ int main(int argc, char **argv)
                                 s = (cornerPointsSharp->points[i].intensity - int(cornerPointsSharp->points[i].intensity)) / SCAN_PERIOD;
                             else
                                 s = 1.0;
-                            ceres::CostFunction *cost_function = LidarEdgeFactor::Create(curr_point, last_point_a, last_point_b, s);
-                            problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
+                            // ceres::CostFunction *cost_function = LidarEdgeFactor::Create(curr_point, last_point_a, last_point_b, s);
+                            // problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
+
+                            ceres::CostFunction *cost_function = new MY_LidarEdgeFactor(curr_point, last_point_a, last_point_b);
+                            problem.AddResidualBlock(cost_function, loss_function, paras);
+
                             corner_correspondence++;
                         }
                     }
@@ -478,8 +490,18 @@ int main(int argc, char **argv)
                                     s = (surfPointsFlat->points[i].intensity - int(surfPointsFlat->points[i].intensity)) / SCAN_PERIOD;
                                 else
                                     s = 1.0;
-                                ceres::CostFunction *cost_function = LidarPlaneFactor::Create(curr_point, last_point_a, last_point_b, last_point_c, s);
-                                problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
+                                // ceres::CostFunction *cost_function = LidarPlaneFactor::Create(curr_point, last_point_a, last_point_b, last_point_c, s);
+                                // problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
+
+                                // double paras[7];
+                                // for(int i = 0; i < 4; i ++)
+                                //     paras[i] = para_q[i];
+                                // for(int i = 0; i < 3; i ++)
+                                //     paras[i + 4] = para_t[i];
+
+                                ceres::CostFunction *cost_function = new MY_LidarPlaneFactor(curr_point, last_point_a, last_point_b, last_point_c);
+                                problem.AddResidualBlock(cost_function, loss_function, paras);
+
                                 plane_correspondence++;
                             }
                         }
@@ -613,4 +635,34 @@ int main(int argc, char **argv)
         rate.sleep();
     }
     return 0;
+}
+
+
+
+
+
+bool PoseSE3Parameterization::Plus(const double *x, const double *delta, double *x_plus_delta) const
+{
+    Eigen::Map<const Eigen::Vector3d> trans(x + 4);
+
+    Eigen::Quaterniond delta_q;
+    Eigen::Vector3d delta_t;
+    getTransformFromSe3(Eigen::Map<const Eigen::Matrix<double,6,1>>(delta), delta_q, delta_t);
+    Eigen::Map<const Eigen::Quaterniond> quater(x);
+    Eigen::Map<Eigen::Quaterniond> quater_plus(x_plus_delta);
+    Eigen::Map<Eigen::Vector3d> trans_plus(x_plus_delta + 4);
+
+    quater_plus = delta_q * quater;
+    trans_plus = delta_q * trans + delta_t;
+
+    return true;
+}
+
+bool PoseSE3Parameterization::ComputeJacobian(const double *x, double *jacobian) const
+{
+    Eigen::Map<Eigen::Matrix<double, 7, 6, Eigen::RowMajor>> j(jacobian);
+    (j.topRows(6)).setIdentity();
+    (j.bottomRows(1)).setZero();
+
+    return true;
 }

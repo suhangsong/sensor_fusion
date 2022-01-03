@@ -569,8 +569,9 @@ void process()
 					ceres::Problem::Options problem_options;
 
 					ceres::Problem problem(problem_options);
-					problem.AddParameterBlock(parameters, 4, q_parameterization);
-					problem.AddParameterBlock(parameters + 4, 3);
+					// problem.AddParameterBlock(parameters, 4, q_parameterization);
+					// problem.AddParameterBlock(parameters + 4, 3);
+					problem.AddParameterBlock(parameters, 7, new PoseSE3Parameterization());
 
 					TicToc t_data;
 					int corner_num = 0;
@@ -616,8 +617,12 @@ void process()
 								point_a = 0.1 * unit_direction + point_on_line;
 								point_b = -0.1 * unit_direction + point_on_line;
 
-								ceres::CostFunction *cost_function = LidarEdgeFactor::Create(curr_point, point_a, point_b, 1.0);
-								problem.AddResidualBlock(cost_function, loss_function, parameters, parameters + 4);
+								// ceres::CostFunction *cost_function = LidarEdgeFactor::Create(curr_point, point_a, point_b, 1.0);
+								// problem.AddResidualBlock(cost_function, loss_function, parameters, parameters + 4);
+
+								ceres::CostFunction *cost_function = new MY_LidarEdgeFactor(curr_point, point_a, point_b);
+								problem.AddResidualBlock(cost_function, loss_function, parameters);
+
 								corner_num++;	
 							}							
 						}
@@ -681,8 +686,10 @@ void process()
 							Eigen::Vector3d curr_point(pointOri.x, pointOri.y, pointOri.z);
 							if (planeValid)
 							{
-								ceres::CostFunction *cost_function = LidarPlaneNormFactor::Create(curr_point, norm, negative_OA_dot_norm);
-								problem.AddResidualBlock(cost_function, loss_function, parameters, parameters + 4);
+								// ceres::CostFunction *cost_function = LidarPlaneNormFactor::Create(curr_point, norm, negative_OA_dot_norm);
+								// problem.AddResidualBlock(cost_function, loss_function, parameters, parameters + 4);
+								ceres::CostFunction *cost_function = new MY_LidarPlaneNormFactor(curr_point, norm, negative_OA_dot_norm);
+								problem.AddResidualBlock(cost_function, loss_function, parameters);
 								surf_num++;
 							}
 						}
@@ -948,4 +955,35 @@ int main(int argc, char **argv)
 	ros::spin();
 
 	return 0;
+}
+
+
+
+
+
+
+bool PoseSE3Parameterization::Plus(const double *x, const double *delta, double *x_plus_delta) const
+{
+    Eigen::Map<const Eigen::Vector3d> trans(x + 4);
+
+    Eigen::Quaterniond delta_q;
+    Eigen::Vector3d delta_t;
+    getTransformFromSe3(Eigen::Map<const Eigen::Matrix<double,6,1>>(delta), delta_q, delta_t);
+    Eigen::Map<const Eigen::Quaterniond> quater(x);
+    Eigen::Map<Eigen::Quaterniond> quater_plus(x_plus_delta);
+    Eigen::Map<Eigen::Vector3d> trans_plus(x_plus_delta + 4);
+
+    quater_plus = delta_q * quater;
+    trans_plus = delta_q * trans + delta_t;
+
+    return true;
+}
+
+bool PoseSE3Parameterization::ComputeJacobian(const double *x, double *jacobian) const
+{
+    Eigen::Map<Eigen::Matrix<double, 7, 6, Eigen::RowMajor>> j(jacobian);
+    (j.topRows(6)).setIdentity();
+    (j.bottomRows(1)).setZero();
+
+    return true;
 }

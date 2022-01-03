@@ -19,6 +19,251 @@
 #include <pcl/point_types.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <math.h>
+
+class MY_LidarEdgeFactor : public ceres::SizedCostFunction<1, 7>
+{
+	public:
+		MY_LidarEdgeFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_a_,
+						Eigen::Vector3d last_point_b_)
+			: curr_point(curr_point_), last_point_a(last_point_a_), last_point_b(last_point_b_) {}
+		
+		virtual ~MY_LidarEdgeFactor() {}
+
+		virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const
+		{
+			Eigen::Map<const Eigen::Quaterniond> q_last_curr(parameters[0]);
+			Eigen::Map<const Eigen::Vector3d> t_last_curr(parameters[0] + 4);
+			Eigen::Vector3d lp;
+			lp = q_last_curr * curr_point + t_last_curr;
+
+			Eigen::Vector3d nu = (lp - last_point_a).cross(lp - last_point_b);
+			Eigen::Vector3d de = last_point_a - last_point_b;
+
+			nu.x() = nu.x() / de.norm();
+			nu.y() = nu.y() / de.norm();
+			nu.z() = nu.z() / de.norm();
+			
+			residuals[0] = sqrt(nu.x() * nu.x() + nu.y() * nu.y() + nu.z() * nu.z());
+
+			if(jacobians != NULL)
+			{
+				if(jacobians[0] != NULL)
+				{
+					Eigen::Matrix<double, 3, 3> skew_lp = this->skew1(lp);
+					Eigen::Matrix<double, 3, 6> dp_by_so3;
+					dp_by_so3.block<3, 3>(0, 0) = -skew_lp;
+					(dp_by_so3.block<3, 3>(0, 3)).setIdentity();
+					Eigen::Map<Eigen::Matrix<double, 1, 7, Eigen::RowMajor>> J_se3(jacobians[0]);
+					J_se3.setZero();
+
+					Eigen::Vector3d lpa = last_point_a;
+					Eigen::Vector3d lpb = last_point_b;
+					Eigen::Matrix<double, 1, 3> middle = (lp - lpb).cross(lp - lpa).transpose() * this->skew1(lpa - lpb) / (((lp - lpb).cross(lp - lpa)).norm() * de.norm());
+					J_se3.block<1, 6>(0, 0) = middle * dp_by_so3;
+				}
+			}
+
+			return true;
+
+		}
+	
+	private:
+		Eigen::Matrix3d skew1(Eigen::Vector3d point) const
+		{
+			Eigen::Matrix3d res;
+			res.setZero();
+			res(0, 1) = -point(2);
+			res(0, 2) = point(1);
+			res(1, 2) = -point(0);
+			res(1, 0) = point(2);
+			res(2, 0) = -point(1);
+			res(2, 1) = point(0);
+			return res;
+		}
+		Eigen::Vector3d curr_point, last_point_a, last_point_b;
+};
+
+
+class MY_LidarPlaneFactor : public ceres::SizedCostFunction<1, 7>
+{
+	public:
+		MY_LidarPlaneFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_j_,
+					 Eigen::Vector3d last_point_l_, Eigen::Vector3d last_point_m_)
+		: curr_point(curr_point_), last_point_j(last_point_j_), last_point_l(last_point_l_),
+		  last_point_m(last_point_m_)
+		{
+			ljm_norm = (last_point_j - last_point_l).cross(last_point_j - last_point_m);
+			ljm_norm.normalize();
+		}
+		virtual ~MY_LidarPlaneFactor() {}
+
+		virtual bool Evaluate(double const* const* parameters, double *residuals, double **jacobians) const
+		{
+			Eigen::Map<const Eigen::Quaterniond> q_w_curr(parameters[0]);
+			Eigen::Map<const Eigen::Vector3d> t_w_curr(parameters[0] + 4);
+			Eigen::Vector3d point_w = q_w_curr * curr_point + t_w_curr;
+
+			residuals[0] = ljm_norm.dot(point_w - last_point_j);
+
+			if(jacobians != NULL)
+			{
+				if(jacobians[0] != NULL)
+				{
+					Eigen::Matrix3d skew_point_w = this->skew1(point_w);
+					Eigen::Matrix<double, 3, 6> dp_by_so3;
+					dp_by_so3.block<3, 3>(0, 0) = -skew_point_w;
+					(dp_by_so3.block<3, 3>(0, 3)).setIdentity();
+
+					Eigen::Map<Eigen::Matrix<double, 1, 7, Eigen::RowMajor>> J_se3(jacobians[0]);
+					J_se3.setZero();
+					J_se3.block<1, 6>(0, 0) = ljm_norm.transpose() * dp_by_so3;
+				}
+			}
+			return true;
+		}
+
+	private:
+		Eigen::Matrix3d skew1(Eigen::Vector3d point) const
+		{
+			Eigen::Matrix3d res;
+			res.setZero();
+			res(0, 1) = -point(2);
+			res(0, 2) = point(1);
+			res(1, 2) = -point(0);
+			res(1, 0) = point(2);
+			res(2, 0) = -point(1);
+			res(2, 1) = point(0);
+			return res;
+		}
+		Eigen::Vector3d curr_point, last_point_j, last_point_l, last_point_m;
+		Eigen::Vector3d ljm_norm;
+		// double negative_OA_dot_norm;
+
+
+};
+
+class MY_LidarPlaneNormFactor : public ceres::SizedCostFunction<1, 7>
+{
+	public:
+		MY_LidarPlaneNormFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d plane_unit_norm_,
+						 double negative_OA_dot_norm_) : curr_point(curr_point_), plane_unit_norm(plane_unit_norm_),
+														 negative_OA_dot_norm(negative_OA_dot_norm_) {}
+		virtual ~MY_LidarPlaneNormFactor()  {}
+
+		virtual bool Evaluate(double const* const* parameters, double *residuals, double **jacobians) const
+		{
+			Eigen::Map<const Eigen::Quaterniond> q_w_curr(parameters[0]);
+			Eigen::Map<const Eigen::Vector3d> t_w_curr(parameters[0] + 4);
+			Eigen::Vector3d point_w = q_w_curr * curr_point + t_w_curr;
+
+			residuals[0] = plane_unit_norm.dot(point_w) + negative_OA_dot_norm;
+
+			if(jacobians != NULL)
+			{
+				if(jacobians[0] != NULL)
+				{
+					Eigen::Matrix3d skew_point_w = this->skew1(point_w);
+					Eigen::Matrix<double, 3, 6> dp_by_so3;
+					dp_by_so3.block<3, 3>(0, 0) = -skew_point_w;
+					(dp_by_so3.block<3, 3>(0, 3)).setIdentity();
+
+					Eigen::Map<Eigen::Matrix<double, 1, 7, Eigen::RowMajor>> J_se3(jacobians[0]);
+					J_se3.setZero();
+					J_se3.block<1, 6>(0, 0) = plane_unit_norm.transpose() * dp_by_so3;
+				}
+			}
+			return true;
+		}
+		
+	private:
+		Eigen::Vector3d curr_point;
+		Eigen::Vector3d plane_unit_norm;
+		double negative_OA_dot_norm;
+		Eigen::Matrix3d skew1(Eigen::Vector3d point) const
+		{
+			Eigen::Matrix3d res;
+			res.setZero();
+			res(0, 1) = -point(2);
+			res(0, 2) = point(1);
+			res(1, 2) = -point(0);
+			res(1, 0) = point(2);
+			res(2, 0) = -point(1);
+			res(2, 1) = point(0);
+			return res;
+		}
+};
+
+
+
+class PoseSE3Parameterization : public ceres::LocalParameterization
+{
+	public:
+		PoseSE3Parameterization() {}
+		virtual ~PoseSE3Parameterization() {}
+		virtual bool Plus(const double* x, const double* delta, double* x_plus_delta) const;
+
+		virtual bool ComputeJacobian(const double* x, double* jacobian) const;
+
+		virtual int GlobalSize() const { return 7; }
+		virtual int LocalSize() const { return 6; }
+	
+	private:
+		void getTransformFromSe3(const Eigen::Matrix<double,6,1>& se3, Eigen::Quaterniond& q, Eigen::Vector3d& t) const {
+			Eigen::Vector3d omega(se3.data());
+			Eigen::Vector3d upsilon(se3.data()+3);
+			Eigen::Matrix3d Omega = skew(omega);
+
+			double theta = omega.norm();
+			double half_theta = 0.5*theta;
+
+			double imag_factor;
+			double real_factor = cos(half_theta);
+			if(theta<1e-10)
+			{
+				double theta_sq = theta*theta;
+				double theta_po4 = theta_sq*theta_sq;
+				imag_factor = 0.5-0.0208333*theta_sq+0.000260417*theta_po4;
+			}
+			else
+			{
+				double sin_half_theta = sin(half_theta);
+				imag_factor = sin_half_theta/theta;
+			}
+
+			q = Eigen::Quaterniond(real_factor, imag_factor*omega.x(), imag_factor*omega.y(), imag_factor*omega.z());
+
+
+			Eigen::Matrix3d J;
+			if (theta<1e-10)
+			{
+				J = q.matrix();
+			}
+			else
+			{
+				Eigen::Matrix3d Omega2 = Omega*Omega;
+				J = (Eigen::Matrix3d::Identity() + (1-cos(theta))/(theta*theta)*Omega + (theta-sin(theta))/(pow(theta,3))*Omega2);
+			}
+
+			t = J*upsilon;
+		}
+
+		Eigen::Matrix<double,3,3> skew(Eigen::Matrix<double,3,1>& mat_in) const{
+			Eigen::Matrix<double,3,3> skew_mat;
+			skew_mat.setZero();
+			skew_mat(0,1) = -mat_in(2);
+			skew_mat(0,2) =  mat_in(1);
+			skew_mat(1,2) = -mat_in(0);
+			skew_mat(1,0) =  mat_in(2);
+			skew_mat(2,0) = -mat_in(1);
+			skew_mat(2,1) =  mat_in(0);
+			return skew_mat;
+		}
+
+};
+
+
+
 
 struct LidarEdgeFactor
 {
@@ -64,6 +309,8 @@ struct LidarEdgeFactor
 	Eigen::Vector3d curr_point, last_point_a, last_point_b;
 	double s;
 };
+
+
 
 struct LidarPlaneFactor
 {
@@ -181,3 +428,5 @@ struct LidarDistanceFactor
 	Eigen::Vector3d curr_point;
 	Eigen::Vector3d closed_point;
 };
+
+

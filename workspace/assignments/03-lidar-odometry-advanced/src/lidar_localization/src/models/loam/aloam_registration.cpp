@@ -63,10 +63,16 @@ bool CeresALOAMRegistration::AddEdgeFactor(
     const double &ratio
 ) {
     ceres::CostFunction *factor_edge = LidarEdgeFactor::Create(
-        source, 
-        target_x, target_y, 
-        ratio
+    source, 
+    target_x, target_y, 
+    ratio
     );
+    // ceres::CostFunction *factor_edge = new MY_LidarEdgeFactor(
+    //     source, 
+    //     target_x, target_y
+    // );
+
+
     
     problem_.AddResidualBlock(
         factor_edge, 
@@ -96,6 +102,10 @@ bool CeresALOAMRegistration::AddPlaneFactor(
         target_x, target_y, target_z, 
         ratio
     );
+    // ceres::CostFunction *factor_plane = new MY_LidarPlaneFactor(
+    //     source, 
+    //     target_x, target_y, target_z
+    // );
 
     problem_.AddResidualBlock(
         factor_plane,
