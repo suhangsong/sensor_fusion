@@ -112,10 +112,15 @@ bool MatchingFlow::UpdateMatching() {
         //
 
         // naive implementation:
-        Eigen::Matrix4f init_pose = Eigen::Matrix4f::Identity();
-        
-        matching_ptr_->SetInitPose(init_pose);
-        matching_ptr_->SetInited();
+        // Eigen::Matrix4f init_pose = Eigen::Matrix4f::Identity();
+
+        // this is initialization from start position!(time 0)
+        // matching_ptr_->SetGNSSPose(current_gnss_data_.pose);
+        matching_ptr_->SetScanContextPose(current_cloud_data_);
+
+        // Eigen::Matrix4f init_pose = current_gnss_data_.pose;
+        // matching_ptr_->SetInitPose(init_pose);
+        // matching_ptr_->SetInited();
     }
 
     return matching_ptr_->Update(current_cloud_data_, laser_odometry_);

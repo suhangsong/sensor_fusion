@@ -213,11 +213,15 @@ bool Matching::SetScanContextPose(const CloudData& init_scan) {
     // get init pose proposal using scan context match:
     Eigen::Matrix4f init_pose =  Eigen::Matrix4f::Identity();
 
+    std::cout << "get init pose proposal using scan context match: (detectLoopClosure)" << std::endl;
+
     if (
         !scan_context_manager_ptr_->DetectLoopClosure(init_scan, init_pose)
     ) {
         return false;
     }
+
+    std::cout << "the init pose have calculated, the init_pose" << init_pose << std::endl;
 
     // set init pose:
     SetInitPose(init_pose);

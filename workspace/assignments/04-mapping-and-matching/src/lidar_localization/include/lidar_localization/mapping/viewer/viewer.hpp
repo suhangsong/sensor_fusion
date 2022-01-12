@@ -46,6 +46,8 @@ class Viewer {
     bool JointLocalMap(CloudData::CLOUD_PTR& local_map_ptr);
     bool JointCloudMap(const std::deque<KeyFrame>& key_frames, 
                              CloudData::CLOUD_PTR& map_cloud_ptr);
+    bool JointCloudMap1(const std::deque<KeyFrame>& key_frames, 
+                             CloudData::CLOUD_PTR& map_cloud_ptr);
 
   private:
     std::string data_path_ = "";
