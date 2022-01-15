@@ -114,8 +114,10 @@ bool MatchingFlow::UpdateMatching() {
         // naive implementation:
         // Eigen::Matrix4f init_pose = Eigen::Matrix4f::Identity();
 
-        // this is initialization from start position!(time 0)
+        // this is initialization from start position!(time 0)，assign the gnss for the init pose, but this method have to start from 0 second.
         // matching_ptr_->SetGNSSPose(current_gnss_data_.pose);
+
+        // this is global localization! using scan context, this method is suit no init pose.
         matching_ptr_->SetScanContextPose(current_cloud_data_);
 
         // Eigen::Matrix4f init_pose = current_gnss_data_.pose;
