@@ -80,20 +80,31 @@ template <typename _T1> struct MultiPosAccResidual
 
      * assume body frame same as accelerometer frame, 
      * so bottom left params in the misalignment matris are set to zero */
+    // CalibratedTriad_<_T2> calib_triad( 
+    //   //
+    //   // TODO: implement lower triad model here
+    //   //
+    //   // mis_yz, mis_zy, mis_zx:
+    //   params[0], params[1], params[2],
+    //   // mis_xz, mis_xy, mis_yx:
+    //   _T2(0), _T2(0), _T2(0),
+    //   //    s_x,    s_y,    s_z:
+    //   params[3], params[4], params[5], 
+    //   //    b_x,    b_y,    b_z: 
+    //   params[6], params[7], params[8] 
+    // );
+    
     CalibratedTriad_<_T2> calib_triad( 
-      //
-      // TODO: implement lower triad model here
-      //
       // mis_yz, mis_zy, mis_zx:
-      params[0], params[1], params[2],
-      // mis_xz, mis_xy, mis_yx:
       _T2(0), _T2(0), _T2(0),
+      // mis_xz, mis_xy, mis_yx:
+      params[0], params[1], params[2],
       //    s_x,    s_y,    s_z:
       params[3], params[4], params[5], 
       //    b_x,    b_y,    b_z: 
       params[6], params[7], params[8] 
     );
-    
+
     // apply undistortion transform:
     Eigen::Matrix< _T2, 3 , 1> calib_samp = calib_triad.unbiasNormalize( raw_samp );
     
@@ -110,6 +121,79 @@ template <typename _T1> struct MultiPosAccResidual
   
   const _T1 g_mag_;
   const Eigen::Matrix< _T1, 3 , 1> sample_;
+};
+
+class MultiPoseCostFunction : public ceres::SizedCostFunction<1, 9>
+{
+  public:
+    MultiPoseCostFunction(const double &g_mag, 
+    const Eigen::Matrix< double, 3 , 1> &sample 
+  ) : g_mag_(g_mag), sample_(sample) {}
+
+    virtual ~MultiPoseCostFunction() {}
+
+    virtual bool Evaluate(double const* const* parameters, double* residuals, double** jacobians) const
+    {
+      Eigen::Matrix<double, 3, 1> raw_samp(sample_(0), sample_(1), sample_(2));
+
+      CalibratedTriad_<double> calib_triad(
+      // mis_yz, mis_zy, mis_zx:
+      double(0), double(0), double(0),
+      // mis_xz, mis_xy, mis_yx:
+      parameters[0][0], parameters[0][1], parameters[0][2],
+      //    s_x,    s_y,    s_z:
+      parameters[0][3], parameters[0][4], parameters[0][5], 
+      //    b_x,    b_y,    b_z: 
+      parameters[0][6], parameters[0][7], parameters[0][8] 
+      );
+
+      Eigen::Matrix<double, 3, 1> calib_samp = calib_triad.unbiasNormalize( raw_samp );
+
+      residuals[0] = g_mag_ * g_mag_ - calib_samp.norm() * calib_samp.norm();
+
+      if(jacobians != NULL && jacobians[0] != NULL)
+      {
+        Eigen::Matrix<double, 3, 3> temp_matrix = Eigen::Matrix<double, 3, 3>::Zero();
+        Eigen::Matrix<double, 3, 3> calib_matrix = calib_triad.getMisalignmentMatrix();
+        Eigen::Matrix<double, 3, 3> k_matrix = calib_triad.getScaleMatrix();
+        Eigen::Matrix<double, 3, 1> b_vector = calib_triad.getBiasVector();
+        Eigen::Matrix<double, 3, 1> temp_vector = Eigen::Matrix<double, 3, 1>::Zero();
+
+        temp_matrix(1, 0) = 1;
+        jacobians[0][0] = -2 * calib_samp.transpose() * temp_matrix * k_matrix * (raw_samp - b_vector);
+        temp_matrix(1, 0) = 0;
+        temp_matrix(2, 0) = -1;
+        jacobians[0][1] = -2 * calib_samp.transpose() * temp_matrix * k_matrix * (raw_samp - b_vector);
+        temp_matrix(2, 0) = 0;
+        temp_matrix(2, 1) = 1;
+        jacobians[0][2] = -2 * calib_samp.transpose() * temp_matrix * k_matrix * (raw_samp - b_vector);
+
+        temp_matrix(2, 1) = 0;
+        temp_matrix(0, 0) = 1;
+        jacobians[0][3] = -2 * calib_samp.transpose() * calib_matrix * temp_matrix * (raw_samp - b_vector);
+        temp_matrix(0, 0) = 0;
+        temp_matrix(1, 1) = 1;
+        jacobians[0][4] = -2 * calib_samp.transpose() * calib_matrix * temp_matrix * (raw_samp - b_vector);
+        temp_matrix(1, 1) = 0;
+        temp_matrix(2, 2) = 1;
+        jacobians[0][5] = -2 * calib_samp.transpose() * calib_matrix * temp_matrix * (raw_samp - b_vector);
+
+        temp_vector(0, 0) = 1;
+        jacobians[0][6] = 2 * calib_samp.transpose() * calib_matrix * k_matrix * temp_vector;
+        temp_vector(0, 0) = 0;
+        temp_vector(1, 0) = 1;
+        jacobians[0][7] = 2 * calib_samp.transpose() * calib_matrix * k_matrix * temp_vector;
+        temp_vector(1, 0) = 0;
+        temp_vector(2, 0) = 1;
+        jacobians[0][8] = 2 * calib_samp.transpose() * calib_matrix * k_matrix * temp_vector;
+
+      }
+
+      return true;
+    }
+
+  const double g_mag_;
+  const Eigen::Matrix<double, 3, 1> sample_;
 };
 
 template <typename _T1> struct MultiPosGyroResidual
@@ -218,9 +302,14 @@ bool MultiPosCalibration_<_T>::calibrateAcc(
     //
     // TODO: implement lower triad model here
     //
-    acc_calib_params[0] = init_acc_calib_.misYZ();
-    acc_calib_params[1] = init_acc_calib_.misZY();
-    acc_calib_params[2] = init_acc_calib_.misZX();
+    // acc_calib_params[0] = init_acc_calib_.misYZ();
+    // acc_calib_params[1] = init_acc_calib_.misZY();
+    // acc_calib_params[2] = init_acc_calib_.misZX();
+
+    acc_calib_params[0] = init_acc_calib_.misXZ();
+    acc_calib_params[1] = init_acc_calib_.misXY();
+    acc_calib_params[2] = init_acc_calib_.misYX();
+
     
     acc_calib_params[3] = init_acc_calib_.scaleX();
     acc_calib_params[4] = init_acc_calib_.scaleY();
@@ -253,9 +342,15 @@ bool MultiPosCalibration_<_T>::calibrateAcc(
     ceres::Problem problem;
     for( int i = 0; i < static_samples.size(); i++)
     {
-      ceres::CostFunction* cost_function = MultiPosAccResidual<_T>::Create ( 
-        g_mag_, static_samples[i].data() 
-      );
+      // ceres::CostFunction* cost_function = MultiPosAccResidual<_T>::Create ( 
+      //   g_mag_, static_samples[i].data() 
+      // );
+      Eigen::Matrix< double, 3 , 1> temp;
+      temp(0, 0) = (double)static_samples[i].data()(0, 0);
+      temp(1, 0) = (double)static_samples[i].data()(1, 0);
+      temp(2, 0) = (double)static_samples[i].data()(2, 0);
+
+      ceres::CostFunction* cost_function = new MultiPoseCostFunction((double)g_mag_, temp);
 
       problem.AddResidualBlock ( 
         cost_function,           /* error fuction */
@@ -287,14 +382,27 @@ bool MultiPosCalibration_<_T>::calibrateAcc(
     return false;
   }
 
+  // acc_calib_ = CalibratedTriad_<_T>( 
+  //   //
+  //   // TODO: implement lower triad model here
+  //   // 
+  //   min_cost_calib_params[0],
+  //   min_cost_calib_params[1],
+  //   min_cost_calib_params[2],
+  //   0,0,0,
+  //   min_cost_calib_params[3],
+  //   min_cost_calib_params[4],
+  //   min_cost_calib_params[5],
+  //   min_cost_calib_params[6],
+  //   min_cost_calib_params[7],
+  //   min_cost_calib_params[8] 
+  // );
+
   acc_calib_ = CalibratedTriad_<_T>( 
-    //
-    // TODO: implement lower triad model here
-    // 
+    0,0,0,
     min_cost_calib_params[0],
     min_cost_calib_params[1],
     min_cost_calib_params[2],
-    0,0,0,
     min_cost_calib_params[3],
     min_cost_calib_params[4],
     min_cost_calib_params[5],
@@ -302,7 +410,7 @@ bool MultiPosCalibration_<_T>::calibrateAcc(
     min_cost_calib_params[7],
     min_cost_calib_params[8] 
   );
-  
+
   calib_acc_samples_.reserve(n_samps);
   
   // Calibrate the input accelerometer data with the obtained calibration
@@ -467,3 +575,4 @@ template <typename _T>
 
 template class MultiPosCalibration_<double>;
 template class MultiPosCalibration_<float>;
+
