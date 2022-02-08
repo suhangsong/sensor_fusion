@@ -7,6 +7,8 @@
 
 #include "imu_integration/estimator/activity.hpp"
 #include "glog/logging.h"
+#include <iomanip>
+
 
 namespace imu_integration {
 
@@ -36,6 +38,7 @@ void Activity::Init(void) {
     G_.y() = imu_config_.gravity.y;
     G_.z() = imu_config_.gravity.z;
 
+    std::cout << "G_: " << G_.z() << std::endl;
     // b. angular velocity bias:
     private_nh_.param("imu/bias/angular_velocity/x", imu_config_.bias.angular_velocity.x,  0.0);
     private_nh_.param("imu/bias/angular_velocity/y", imu_config_.bias.angular_velocity.y,  0.0);
@@ -81,12 +84,13 @@ bool Activity::ReadData(void) {
     if (static_cast<size_t>(0) == imu_data_buff_.size())
         return false;
 
-    if (!initialized_) {
-        odom_ground_truth_sub_ptr->ParseData(odom_data_buff_);
+    // if (!initialized_) 
+    // {
+    //     odom_ground_truth_sub_ptr->ParseData(odom_data_buff_);
 
-        if (static_cast<size_t>(0) == odom_data_buff_.size())
-            return false;
-    }
+    //     if (static_cast<size_t>(0) == odom_data_buff_.size())
+    //         return false;
+    // }
 
     return true;
 }
@@ -95,12 +99,12 @@ bool Activity::HasData(void) {
     if (imu_data_buff_.size() < static_cast<size_t>(3))
         return false;
 
-    if (
-        !initialized_ && 
-        static_cast<size_t>(0) == odom_data_buff_.size()
-    ) {
-        return false;
-    }
+    // if (
+    //     // !initialized_ && 
+    //     static_cast<size_t>(0) == odom_data_buff_.size())
+    // {
+    //     return false;
+    // }
 
     return true;
 }
@@ -108,11 +112,14 @@ bool Activity::HasData(void) {
 bool Activity::UpdatePose(void) {
     if (!initialized_) {
         // use the latest measurement for initialization:
-        OdomData &odom_data = odom_data_buff_.back();
+        // OdomData &odom_data = odom_data_buff_.back();
         IMUData imu_data = imu_data_buff_.back();
 
-        pose_ = odom_data.pose;
-        vel_ = odom_data.vel;
+        // pose_ = odom_data.pose;
+        // vel_ = odom_data.vel;
+        pose_ = Eigen::Matrix4d::Identity();
+        vel_ = Eigen::Vector3d::Zero();
+        // vel_.x() = 10;
 
         initialized_ = true;
 
@@ -135,7 +142,64 @@ bool Activity::UpdatePose(void) {
 
         // move forward -- 
         // NOTE: this is NOT fixed. you should update your buffer according to the method of your choice:
+
+        size_t index_prev = 0;
+        size_t index_curr = 1;
+        Eigen::Vector3d angular_delta, velocity_delta;
+        Eigen::Matrix3d r_curr, r_prev;
+
+        double delta_t;
+        
+        GetAngularDelta(index_curr, index_prev, angular_delta);
+
+        UpdateOrientation(angular_delta, r_curr, r_prev);
+
+        GetVelocityDelta(index_curr, index_prev, r_curr, r_prev, delta_t, velocity_delta);
+
+        UpdatePosition(delta_t, velocity_delta);
+
         imu_data_buff_.pop_front();
+
+        // OdomData odom_true = odom_data_buff_.at(0);
+
+        // odom_data_buff_.pop_front();
+
+        // static int time = 0;
+        // static int current_time = 0;
+        // ROS_INFO("time is: %d", time);
+
+        /*
+        if(time < 100)
+        {
+            time ++;
+        }
+        else
+        {
+            time = 0;
+            Eigen::Matrix3d odom_true_pose = odom_true.pose.block<3, 3>(0, 0);
+            Eigen::Matrix3d odom_esti_pose = pose_.block<3, 3>(0, 0);
+
+            Eigen::Vector3d error_vel = odom_true.vel - vel_;
+            Eigen::Vector3d error_position = odom_true.pose.block<3, 1>(0, 3) - pose_.block<3, 1>(0, 3);
+
+            Eigen::Matrix3d error_orientation = odom_true_pose.transpose() * odom_esti_pose;
+
+            std::cout << std::endl;
+            std::cout << current_time++ << "\t" << std::fixed << odom_true.time << std::endl;
+            std::cout << "the velocity error is: " << error_vel.x() << "\t" << error_vel.y() << "\t" << error_vel.z() << "\t" << error_vel.norm() << std::endl;
+            std::cout << "the position error is: " << error_position.x() << "\t" << error_position.y() << "\t" << error_position.z() << "\t" << error_position.norm() << std::endl;
+            std::cout << "the orientation error is: " << std::endl;
+            for(int i = 0; i < 3; i ++)
+            {
+                for(int j = 0; j < 3; j ++)
+                {
+                    std::cout << std::setw(10) << error_orientation(i, j) << "\t\t";
+                }
+                std::cout << std::endl;
+            }
+        }
+        */
+
     }
     
     return true;
@@ -223,7 +287,10 @@ bool Activity::GetAngularDelta(
     Eigen::Vector3d angular_vel_curr = GetUnbiasedAngularVel(imu_data_curr.angular_velocity);
     Eigen::Vector3d angular_vel_prev = GetUnbiasedAngularVel(imu_data_prev.angular_velocity);
 
+    // 中值法
     angular_delta = 0.5*delta_t*(angular_vel_curr + angular_vel_prev);
+    // 欧拉法
+    // angular_delta = delta_t * angular_vel_prev;
 
     return true;
 }
@@ -260,7 +327,10 @@ bool Activity::GetVelocityDelta(
     Eigen::Vector3d linear_acc_curr = GetUnbiasedLinearAcc(imu_data_curr.linear_acceleration, R_curr);
     Eigen::Vector3d linear_acc_prev = GetUnbiasedLinearAcc(imu_data_prev.linear_acceleration, R_prev);
     
+    // 中值法
     velocity_delta = 0.5*delta_t*(linear_acc_curr + linear_acc_prev);
+    // 欧拉法
+    // velocity_delta = delta_t * linear_acc_prev;
 
     return true;
 }
