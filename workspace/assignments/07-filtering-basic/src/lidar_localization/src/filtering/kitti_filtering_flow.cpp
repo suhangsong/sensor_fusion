@@ -142,7 +142,7 @@ bool KITTIFilteringFlow::SaveOdometry(void) {
     const Eigen::Vector3f &position_lidar =
         trajectory.lidar_.at(i).block<3, 1>(0, 3);
 
-    if ((position_ref - position_lidar).norm() > 3.0) {
+    if ((position_ref - position_lidar).norm() > 30) {
       continue;
     }
 
